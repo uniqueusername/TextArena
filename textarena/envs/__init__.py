@@ -1,5 +1,6 @@
 """ Register all game environments """ 
 
+from textarena.envs.Spyfall.locations import LOCATIONS
 from textarena.envs.registration import register, register_with_versions
 from textarena.envs.utils.jury import OpenRouterJury
 from textarena.wrappers import LLMObservationWrapper, ActionFormattingWrapper, GameMessagesAndCurrentBoardObservationWrapper, GameMessagesObservationWrapper, GameBoardObservationWrapper, ClipCharactersActionWrapper, SettlersOfCatanObservationWrapper
@@ -483,7 +484,10 @@ register_with_versions(id="Codenames-v0-hardcore",  entry_point="textarena.envs.
 register_with_versions(id="SettlersOfCatan-v0", entry_point="textarena.envs.SettlersOfCatan.env:SettlersOfCatanEnv", wrappers={"default": [SettlersOfCatanObservationWrapper], "-train": [SettlersOfCatanObservationWrapper]}) 
 
 # SecretMafia [5-15 Players]
-register_with_versions(id="SecretMafia-v0", entry_point="textarena.envs.SecretMafia.env:SecretMafiaEnv", wrappers={"default": CONVERSATIONAL_WRAPPERS, "-train": CONVERSATIONAL_WRAPPERS}, mafia_ratio=0.25, discussion_rounds=3) 
+register_with_versions(id="SecretMafia-v0", entry_point="textarena.envs.SecretMafia.env:SecretMafiaEnv", wrappers={"default": CONVERSATIONAL_WRAPPERS, "-train": CONVERSATIONAL_WRAPPERS}, mafia_ratio=0.25, discussion_rounds=3)
+
+# Spyfall [3+ Players]
+register_with_versionsid="Spyfall-v0", entry_point="textarena.envs.Spyfall.env:SpyfallEnv", wrappers={"default": CONVERSATIONAL_WRAPPERS, "-train": CONVERSATIONAL_WRAPPERS}, max_real_turns=8, locations=LOCATIONS, error_allowance=2)
 
 # WinAsMuchAsYouCanEnv [4 Players]
 register_with_versions(id="WinAsMuchAsYouCan-v0", entry_point="textarena.envs.WinAsMuchAsYouCan.env:WinAsMuchAsYouCanEnv", wrappers={"default": DEFAULT_WRAPPERS, "-train": BOARDGAME_WRAPPERS})

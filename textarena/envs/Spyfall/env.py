@@ -93,7 +93,7 @@ class SpyfallEnv(ta.Env):
         self,
         max_real_turns: int = 8,
         locations: Optional[Dict[str, List[str]]] = None,
-        error_allowance: int = 3,
+        error_allowance: int = 2,
     ):
         self.max_real_turns = max_real_turns
         self.locations = locations or DEFAULT_LOCATIONS
