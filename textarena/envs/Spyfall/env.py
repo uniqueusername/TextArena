@@ -1,50 +1,59 @@
 """
-Spyfall – a social deduction game for 3+ players.
+spyfall (3+ players)
 
-One player is secretly the **spy**; everyone else knows the shared location
-and their personal role at that location.  Players take turns asking each
+one player is secretly the **spy**; everyone else knows the shared location
+and their personal role at that location. players take turns asking each
 other questions, and between every Q&A pair every player gets a chance to
 call a vote or (spy only) guess the location.
 
-Win conditions
-──────────────
-  Spy wins if:
-    • they correctly GUESS the location, OR
+game rules
+  spy wins if
+    • they correctly guess the location, OR
     • they remain undetected, OR
     • the non-spies convict the wrong player.
 
-  Non-spies win if:
+  non-spies win if
     • they correctly identify the spy via majority vote, OR
     • the spy guesses the wrong location.
 
-Tools
-─────
-  All players : [ASK](player_id; question)   – only usable on a real turn
-                [VOTE](player_id)            – usable during any vote
-  Spy only    : [GUESS](location_name)       – usable on virtual turns and
-                                               during the end-of-round vote
-                                               (replaces their VOTE)
+functional details
+  • a "real turn" involves the player whose turn it is asking another
+    player a question, and the askee answering the question.
+  • as any player can call a vote (or the spy can guess) at any time,
+    every "real turn" is part of a "virtual turn". after a question
+    is answered, we pass the turn through every player in a random
+    order so each one has a chance to vote or guess.
+  • real games of spyfall have a round timer. at the end of the timer,
+    there's a mandatory vote. since llms don't experience human-time,
+    we simulate the round timer by setting a maximum count of real turns.
 
-Turn structure
-──────────────
-  1.  A random player is chosen to ask first  (real turn – ASK only).
-  2.  The recipient answers                   (real turn – free-form text).
-  3.  Virtual turn rotation (random order): every player may VOTE or
-      GUESS (spy). Anything else is a no-op pass.
-  4.  If no game-ending event, the answerer becomes the new asker (goto 1).
-  5.  After `max_real_turns` Q&A pairs the round ends.  A forced vote is
-      called where every player must VOTE (spy may GUESS instead. If they
-      guess correctly, they win. Otherwise, they lose and the non-spies win).
-      If there is no majority, the spy wins.
+tools
+  all players
+    [ASK](player_id; question) – only usable on a real turn
+    [VOTE](player_id) – usable during any vote
+  spy only
+    [GUESS](location_name) - usable on virtual turns and during the
+                              end-of-round vote
 
-Voting
-──────
-  • A vote can be initiated on any virtual turn via [VOTE](player_id).
-    When this happens, ALL players are polled (random order) to cast votes.
-  • A strict majority (> n/2) is required.  Ties count as failed votes.
-  • Mid-game failed votes: round continues.
-  • End-of-round failed votes: spy wins.
-  • During any vote, the spy may [GUESS] instead of voting.
+turn structure
+  1.  a random player is chosen for the first real turn
+  2.  the recipient answers (no tool, freeform response)
+  3.  virtual turn rotation occurs (all players in random order). every
+      player may VOTE or GUESS (if spy). anything else is a no-op pass.
+  4.  if no game-ending event, the answerer becomes the new asker (goto 1).
+  5.  after `max_real_turns` the round ends. a forced vote is called
+      (the spy can still GUESS during their virtual turn, but they aren't
+      required to, they can vote like any other player). if they guess
+      correctly, they win. otherwise, they lose and the non-spies win).
+      if there is no majority, the spy wins.
+
+voting
+  • a vote can be initiated on any virtual turn via [VOTE](player_id).
+    when this happens, ALL players are polled in random order to cast votes.
+  • a strict majority (> n/2) is required.  ties count as failed votes.
+  • mid-game failed votes: round continues.
+  • end-of-round failed votes: spy wins.
+  • during any vote, the spy may [GUESS].
 """
 
 import random
@@ -55,7 +64,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import textarena as ta
 from textarena.envs.Spyfall.locations import LOCATIONS as DEFAULT_LOCATIONS
 
-# ── game phases ───────────────────────────────────────────────────────────
+# ── constants ───────────────────────────────────────────────────────────
 
 
 class Phase(Enum):
@@ -65,28 +74,23 @@ class Phase(Enum):
     VOTE = auto()  # collecting votes from all players
 
 
-# ── regex patterns ────────────────────────────────────────────────────────
-
 ASK_PATTERN = re.compile(r"\[ASK\]\s*\((\d+)\s*;\s*(.+?)\)", re.IGNORECASE | re.DOTALL)
 VOTE_PATTERN = re.compile(r"\[VOTE\]\s*\((\d+)\)", re.IGNORECASE)
 GUESS_PATTERN = re.compile(r"\[GUESS\]\s*\((.+?)\)", re.IGNORECASE)
-
 
 # ── environment ───────────────────────────────────────────────────────────
 
 
 class SpyfallEnv(ta.Env):
     """
-    Spyfall environment for TextArena.
+    spyfall environment for TextArena.
 
-    Parameters
-    ----------
-    max_real_turns : int
-        Maximum number of question-answer pairs before the round ends.
-    locations : dict[str, list[str]] | None
-        Custom location→roles mapping.  Falls back to the built-in set.
-    error_allowance : int
-        Number of consecutive invalid moves a player gets before auto-loss.
+    max_real_turns: int
+        maximum number of question-answer pairs before the round ends
+    locations: dict[str, list[str]] | None
+        custom location→roles mapping. falls back to defaults in locations.py
+    error_allowance: int
+        number of consecutive invalid moves a player gets before auto-losing
     """
 
     def __init__(
@@ -99,10 +103,8 @@ class SpyfallEnv(ta.Env):
         self.locations = locations or DEFAULT_LOCATIONS
         self.error_allowance = error_allowance
 
-    # ── reset ─────────────────────────────────────────────────────────────
-
     def reset(self, num_players: int, seed: Optional[int] = None):
-        assert num_players >= 3, "Spyfall requires at least 3 players."
+        assert num_players >= 3, "spyfall requires at least 3 players."
 
         self.state = ta.TeamMultiPlayerState(
             num_players=num_players,
@@ -123,7 +125,6 @@ class SpyfallEnv(ta.Env):
         if non_spy_count <= len(available_roles):
             sampled = random.sample(available_roles, non_spy_count)
         else:
-            # fill unique first, then allow repeats
             sampled = list(available_roles)
             random.shuffle(sampled)
             while len(sampled) < non_spy_count:
@@ -132,7 +133,7 @@ class SpyfallEnv(ta.Env):
         role_idx = 0
         for pid in range(num_players):
             if pid == spy_id:
-                roles[pid] = "Spy"
+                roles[pid] = "spy"
             else:
                 roles[pid] = sampled[role_idx]
                 role_idx += 1
@@ -152,7 +153,7 @@ class SpyfallEnv(ta.Env):
             game_state=game_state,
             player_prompt_function=self._prompt,
             secret_roles={
-                pid: ("Spy" if pid == spy_id else "Non-Spy")
+                pid: ("spy" if pid == spy_id else "non-spy")
                 for pid in range(num_players)
             },
         )
@@ -162,8 +163,6 @@ class SpyfallEnv(ta.Env):
         self._saved_virtual_queue: List[int] = []
         first_asker = random.randint(0, num_players - 1)
         self.state.manually_set_current_player_id(first_asker)
-
-    # ── prompt generation ─────────────────────────────────────────────────
 
     def _prompt(self, player_id: int, game_state: Dict[str, Any]) -> str:
         n = self.state.num_players
@@ -191,9 +190,9 @@ class SpyfallEnv(ta.Env):
                 "- Accusing you to be the spy via a majority vote.\n"
                 "\n"
                 "Available tools:\n"
-                "  [ASK](player_id; question)  – ask a player a question (your asking turn only)\n"
-                "  [VOTE](player_id)           – accuse a player of being the spy (during votes)\n"
-                "  [GUESS](location_name)      – guess the location (ends the game immediately!)\n"
+                "  [ASK](player_id; question) – ask a player a question (your asking turn only)\n"
+                "  [VOTE](player_id) – accuse a player of being the spy (during votes)\n"
+                "  [GUESS](location_name) – guess the location (ends the game immediately!)\n"
                 "\n"
                 f"Possible locations: {location_list}\n"
             )
@@ -210,8 +209,8 @@ class SpyfallEnv(ta.Env):
                 "- Identifying the spy and accusing them via a majority vote.\n"
                 "\n"
                 "Available tools:\n"
-                "  [ASK](player_id; question)  – ask a player a question (your asking turn only)\n"
-                "  [VOTE](player_id)           – accuse a player of being the spy (during votes)\n"
+                "  [ASK](player_id; question) – ask a player a question (your asking turn only)\n"
+                "  [VOTE](player_id) – accuse a player of being the spy (during votes)\n"
                 "\n"
                 "The spy can win by:\n"
                 "- Guessing the location before you discover who they are.\n"
@@ -235,8 +234,6 @@ class SpyfallEnv(ta.Env):
         )
         return base
 
-    # ── step ──────────────────────────────────────────────────────────────
-
     def step(self, action: str) -> Tuple[bool, ta.Info]:
         pid = self.state.current_player_id
 
@@ -251,8 +248,6 @@ class SpyfallEnv(ta.Env):
 
         self._advance()
         return self.state.step(rotate_player=False)
-
-    # ── action handlers ───────────────────────────────────────────────────
 
     def _handle_ask(self, pid: int, action: str):
         m = ASK_PATTERN.search(action)
@@ -292,10 +287,8 @@ class SpyfallEnv(ta.Env):
         self.state.game_state["real_turn_count"] += 1
 
     def _handle_virtual(self, pid: int, action: str):
-        """Virtual turn: VOTE starts a vote, GUESS (spy) ends game, else no-op."""
         gs = self.state.game_state
 
-        # try GUESS (spy only)
         guess_m = GUESS_PATTERN.search(action)
         if guess_m:
             if pid != gs["spy_id"]:
@@ -304,7 +297,6 @@ class SpyfallEnv(ta.Env):
             self._resolve_guess(pid, guess_m.group(1).strip())
             return
 
-        # try VOTE — initiates a full vote
         vote_m = VOTE_PATTERN.search(action)
         if vote_m:
             target = int(vote_m.group(1))
@@ -324,7 +316,6 @@ class SpyfallEnv(ta.Env):
         # anything else = pass (no-op)
 
     def _handle_vote(self, pid: int, action: str):
-        """During a vote: non-spies must VOTE, spy must VOTE or GUESS."""
         gs = self.state.game_state
 
         # spy may GUESS instead of voting
@@ -356,22 +347,17 @@ class SpyfallEnv(ta.Env):
             observation_type=ta.ObservationType.PLAYER_ACTION,
         )
 
-    # ── vote resolution ───────────────────────────────────────────────────
-
     def _resolve_vote(self):
-        """Tally votes and determine outcome."""
         gs = self.state.game_state
         votes = gs["votes"]
         spy_id = gs["spy_id"]
         forced = gs["is_forced_vote"]
         n = self.state.num_players
 
-        # count
         counts: Dict[int, int] = {}
         for target in votes.values():
             counts[target] = counts.get(target, 0) + 1
 
-        # build summary
         vote_summary = ", ".join(
             f"Player {t}: {counts[t]} vote(s)" for t in sorted(counts.keys())
         )
@@ -381,11 +367,11 @@ class SpyfallEnv(ta.Env):
         )
 
         # majority = strictly more than half
+        # a tie or no majority is a failed vote
         majority_threshold = n // 2 + 1
         max_count = max(counts.values()) if counts else 0
         top_targets = [t for t, c in counts.items() if c == max_count]
 
-        # tie or no majority → failed vote
         if max_count < majority_threshold or len(top_targets) > 1:
             if forced:
                 self._spy_wins(
@@ -400,7 +386,7 @@ class SpyfallEnv(ta.Env):
             gs["is_forced_vote"] = False
             return
 
-        # clear majority on a single target
+        # if we have majority on a single target
         accused = top_targets[0]
         if accused == spy_id:
             self._nonspies_win(
@@ -410,8 +396,6 @@ class SpyfallEnv(ta.Env):
             self._spy_wins(
                 f"Player {accused} was accused, but they are NOT the spy! The spy wins!"
             )
-
-    # ── guess resolution ──────────────────────────────────────────────────
 
     def _resolve_guess(self, pid: int, guessed_location: str):
         gs = self.state.game_state
@@ -431,10 +415,8 @@ class SpyfallEnv(ta.Env):
                 f"'{gs['location']}'. Non-spies win!"
             )
 
-    # ── advance / turn management ─────────────────────────────────────────
-
     def _advance(self):
-        """After every action, decide what happens next."""
+        """overarching phase management function."""
         if self.state.made_invalid_move:
             return
         if self.state.done:
@@ -442,19 +424,18 @@ class SpyfallEnv(ta.Env):
 
         gs = self.state.game_state
 
-        # if a vote was just initiated from a virtual turn, transition to VOTE
-        # and queue ALL other players (random order)
+        # queue all *other* players after a vote is initiated
         if self.phase == Phase.VIRTUAL and gs["votes"]:
             self._save_virtual_queue()
             self._start_vote_collection()
             return
 
-        # if there are still queued players, rotate
+        # rotate while there are still queued players
         if self.next_player_ids:
             self.state.manually_set_current_player_id(self.next_player_ids.pop())
             return
 
-        # queue exhausted — resolve current phase and transition
+        # queue exhausted, resolve current phase and transition
 
         if self.phase == Phase.ASK:
             self.phase = Phase.ANSWER
@@ -470,22 +451,21 @@ class SpyfallEnv(ta.Env):
             if gs["real_turn_count"] >= self.max_real_turns:
                 self._start_forced_vote()
                 return
-            # next Q&A
+
+            # return to q&a
             self.phase = Phase.ASK
             self.state.manually_set_current_player_id(gs["answerer_id"])
             return
 
         if self.phase == Phase.VOTE:
-            # all votes collected — resolve
             self._resolve_vote()
             if self.state.done:
                 return
-            # vote failed — resume
+
             self._restore_after_vote()
             return
 
     def _start_virtual_rotation(self):
-        """Queue every player for a virtual turn (random order)."""
         self.phase = Phase.VIRTUAL
         n = self.state.num_players
         order = list(range(n))
@@ -516,15 +496,13 @@ class SpyfallEnv(ta.Env):
         self.state.manually_set_current_player_id(self.next_player_ids.pop())
 
     def _save_virtual_queue(self):
-        """Save remaining virtual turns before switching to vote phase."""
         self._saved_virtual_queue = list(self.next_player_ids)
         self.next_player_ids = []
 
     def _start_vote_collection(self):
-        """Switch to VOTE phase and queue all players who haven't voted."""
         self.phase = Phase.VOTE
         gs = self.state.game_state
-        already_voted = set(gs["votes"].keys())
+        already_voted = set(gs["votes"].keys())  # don't requeue player who called vote
         remaining = [
             pid for pid in range(self.state.num_players) if pid not in already_voted
         ]
@@ -549,12 +527,6 @@ class SpyfallEnv(ta.Env):
         self.state.manually_set_current_player_id(self.next_player_ids.pop())
 
     def _start_forced_vote(self):
-        """End-of-round: start a forced vote (all players, random order).
-
-        Looks identical to a normal vote from every player's perspective.
-        The spy's prompt tells them they may GUESS instead.  Non-spies
-        don't know this is the "final" vote — no spy reveal occurs.
-        """
         gs = self.state.game_state
         gs["votes"] = {}
         gs["is_forced_vote"] = True
@@ -583,7 +555,7 @@ class SpyfallEnv(ta.Env):
         self.state.manually_set_current_player_id(self.next_player_ids.pop())
 
     def _restore_after_vote(self):
-        """After a failed mid-game vote, resume virtual turns or next Q&A."""
+        """after a failed mid-game vote, resume virtual turns or next q&a."""
         saved = list(self._saved_virtual_queue)
         self._saved_virtual_queue = []
 
