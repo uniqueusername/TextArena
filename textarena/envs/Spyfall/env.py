@@ -32,6 +32,7 @@ tools
     [ASK](player_id; question) – only usable on a real turn
     [ANSWER](response) – usable after being [ASK]ed
     [VOTE](player_id) – usable during any vote
+    [PASS] – usable during followup turn
   spy only
     [GUESS](location_name) - usable on virtual turns and during the
                               end-of-round vote
@@ -40,8 +41,8 @@ turn structure
   1. a random player is chosen for the first real turn and asks a
      question to another player using [ASK]
   2. the recipient answers using [ANSWER]
-  3. virtual turn rotation occurs (all players in random order). every
-     player may VOTE or GUESS (if spy). anything else is a no-op pass.
+  3. virtual turn (followup) rotation occurs (all players in random order). every
+     player may VOTE, GUESS (if spy), or PASS.
   4. if no game-ending event, the answerer becomes the new asker (goto 1).
   5. after `max_real_turns` the round ends. a forced vote is called
      (the spy can still GUESS during their virtual turn, but they aren't
@@ -80,6 +81,7 @@ ASK_PATTERN = re.compile(r"\[ASK\]\s*\((\d+)\s*;\s*(.+?)\)", re.IGNORECASE | re.
 ANSWER_PATTERN = re.compile(r"\[ANSWER\]\s*\((.+?)\)", re.IGNORECASE)
 VOTE_PATTERN = re.compile(r"\[VOTE\]\s*\((\d+)\)", re.IGNORECASE)
 GUESS_PATTERN = re.compile(r"\[GUESS\]\s*\((.+?)\)", re.IGNORECASE)
+PASS_PATTERN = re.compile(r"\[PASS\]", re.IGNORECASE)
 
 # ── environment ───────────────────────────────────────────────────────────
 
@@ -197,8 +199,9 @@ class SpyfallEnv(ta.Env):
                 "  [ANSWER](response) – e.g. [ANSWER](The dress code is casual, you see lots of baseball caps.)\n"
                 "  [VOTE](player_id) – e.g. [VOTE](3)\n"
                 "  [GUESS](location_name) – e.g. [GUESS](The Beach)\n"
+                "  [PASS] – use during your followup turn when you don't want to vote or guess\n"
                 "  (ask: your asking turn only | answer: only after being asked\n"
-                "  | vote: during votes | guess: any time)\n"
+                "  | vote: during votes | guess: any time | pass: followup turns only)\n"
                 "\n"
                 f"Possible locations: {location_list}\n"
             )
@@ -224,8 +227,9 @@ class SpyfallEnv(ta.Env):
                 "  [ASK](player_id; question) – e.g. [ASK](2; What's the dress code?)\n"
                 "  [ANSWER](response) – e.g. [ANSWER](The dress code is casual, you see lots of baseball caps.)\n"
                 "  [VOTE](player_id) – e.g. [VOTE](3)\n"
+                "  [PASS] – use during followup turns when you don't want to vote\n"
                 "  (ask: your asking turn only | answer: only after being asked\n"
-                "  | vote: during votes)\n"
+                "  | vote: during votes | pass: followup turns only)\n"
                 "\n"
                 f"Possible locations: {location_list}\n"
             )
@@ -236,13 +240,15 @@ class SpyfallEnv(ta.Env):
             "     another player. Passing is not allowed on your asking turn.\n"
             "  2. The recipient answers using [ANSWER]. Do NOT use [ASK], [VOTE],\n"
             "     or [GUESS] in your answer.\n"
-            "  3. After each Q&A, every player gets a virtual turn where they\n"
-            "     may [VOTE] to accuse someone (or [GUESS] if spy). Anything\n"
-            "     else you type is treated as a pass.\n"
+            "  3. After each Q&A, every player gets a followup turn where they\n"
+            "     may [VOTE] to accuse someone, [PASS], or [GUESS] if they're the spy.\n"
             "  4. If a vote is called, ALL players must cast a [VOTE]. The spy\n"
-            "     may [GUESS] instead of voting.\n"
+            "     may [GUESS] instead of voting. You cannot [PASS] during a vote.\n"
             "  5. The answerer becomes the next asker.\n"
-            "  6. After all questions are exhausted, a final vote is called.\n"
+            "  6. After all questions are exhausted, a final vote is called.\n\n"
+            "  Your actions must contain ONLY a single tool call\n"
+            "  (e.g. [ASK](...), [ANSWER](...), [VOTE](...), [GUESS](...), or [PASS]).\n"
+            "  Do not output anything else.\n"
         )
         return base
 
@@ -319,7 +325,7 @@ class SpyfallEnv(ta.Env):
         )
         self.state.game_state["real_turn_count"] += 1
         self.state.add_observation(
-            message="Answer received. Moving into virtual turn rotation — each player may now vote or pass.",
+            message="Answer received. Moving into followup phase.",
             observation_type=ta.ObservationType.GAME_MESSAGE,
         )
 
@@ -350,7 +356,20 @@ class SpyfallEnv(ta.Env):
             )
             return
 
-        # anything else = pass (no-op)
+        if PASS_PATTERN.search(action):
+            return  # valid pass
+
+        # anything else is invalid
+        if pid == gs["spy_id"]:
+            self._invalid(
+                pid,
+                "You must use [VOTE](player_id), [GUESS](location), or [PASS] during your followup turn.",
+            )
+        else:
+            self._invalid(
+                pid,
+                "You must use [VOTE](player_id) or [PASS] during your followup turn.",
+            )
 
     def _handle_vote(self, pid: int, action: str):
         gs = self.state.game_state
@@ -524,8 +543,9 @@ class SpyfallEnv(ta.Env):
                 self.state.add_observation(
                     to_id=pid,
                     message=(
-                        "Virtual turn: you may [VOTE](player_id) to accuse someone, "
-                        "[GUESS](location) to guess the location, or say anything else to pass."
+                        "Followup turn: you may [VOTE](player_id) to accuse someone, "
+                        "[GUESS](location_name) to guess the location, or [PASS]. "
+                        "You cannot use [ASK] or [ANSWER] during your followup turn."
                     ),
                     observation_type=ta.ObservationType.GAME_MESSAGE,
                 )
@@ -533,8 +553,9 @@ class SpyfallEnv(ta.Env):
                 self.state.add_observation(
                     to_id=pid,
                     message=(
-                        "Virtual turn: you may [VOTE](player_id) to accuse someone, "
-                        "or say anything else to pass."
+                        "Followup turn: you may [VOTE](player_id) to accuse someone, "
+                        "or [PASS]. You cannot use [ASK] or [ANSWER] "
+                        "during your followup turn."
                     ),
                     observation_type=ta.ObservationType.GAME_MESSAGE,
                 )
