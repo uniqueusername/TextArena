@@ -175,7 +175,7 @@ class SpyfallEnv(ta.Env):
             f"Max questions per round: {self.max_real_turns}\n\n"
         )
 
-        if game_state["roles"][player_id] == "Spy":
+        if game_state["roles"][player_id] == "spy":
             base += (
                 "You are the SPY.  You do NOT know the location.\n"
                 "The other players know the location and each have an assigned role.\n"
@@ -189,10 +189,11 @@ class SpyfallEnv(ta.Env):
                 "The other players can win by:\n"
                 "- Accusing you to be the spy via a majority vote.\n"
                 "\n"
-                "Available tools:\n"
-                "  [ASK](player_id; question) – ask a player a question (your asking turn only)\n"
-                "  [VOTE](player_id) – accuse a player of being the spy (during votes)\n"
-                "  [GUESS](location_name) – guess the location (ends the game immediately!)\n"
+                "Available tools — brackets, parentheses, and semicolons must appear exactly as shown:\n"
+                "  [ASK](player_id; question) – e.g. [ASK](2; What's the dress code?)\n"
+                "  [VOTE](player_id)          – e.g. [VOTE](3)\n"
+                "  [GUESS](location_name)     – e.g. [GUESS](The Beach)\n"
+                "  (ask: your asking turn only | vote: during votes | guess: any time)\n"
                 "\n"
                 f"Possible locations: {location_list}\n"
             )
@@ -208,9 +209,9 @@ class SpyfallEnv(ta.Env):
                 "You can win by:\n"
                 "- Identifying the spy and accusing them via a majority vote.\n"
                 "\n"
-                "Available tools:\n"
-                "  [ASK](player_id; question) – ask a player a question (your asking turn only)\n"
-                "  [VOTE](player_id) – accuse a player of being the spy (during votes)\n"
+                "Available tools — brackets, parentheses, and semicolons must appear exactly as shown:\n"
+                "  [ASK](player_id; question) – e.g. [ASK](2; What's the dress code?)\n"
+                "  [VOTE](player_id)          – e.g. [VOTE](3)\n"
                 "\n"
                 "The spy can win by:\n"
                 "- Guessing the location before you discover who they are.\n"
@@ -222,8 +223,10 @@ class SpyfallEnv(ta.Env):
 
         base += (
             "\nTurn structure:\n"
-            "  1. The current asker uses [ASK] to question another player.\n"
-            "  2. The recipient answers freely (just type your answer).\n"
+            "  1. The current asker MUST use [ASK](player_id; question) to question\n"
+            "     another player. Passing is not allowed on your asking turn.\n"
+            "  2. The recipient answers in plain text — do NOT use [ASK], [VOTE],\n"
+            "     or [GUESS] in your answer. Just write your response naturally.\n"
             "  3. After each Q&A, every player gets a virtual turn where they\n"
             "     may [VOTE] to accuse someone (or [GUESS] if spy). Anything\n"
             "     else you type is treated as a pass.\n"
@@ -276,6 +279,14 @@ class SpyfallEnv(ta.Env):
             message=f"Player {pid} asks Player {target}: {question}",
             observation_type=ta.ObservationType.PLAYER_ACTION,
         )
+        self.state.add_observation(
+            to_id=target,
+            message=(
+                f"Player {pid} is asking you: {question}. "
+                "Reply in plain text only — do NOT use [ASK], [VOTE], or [GUESS] in your answer."
+            ),
+            observation_type=ta.ObservationType.GAME_MESSAGE,
+        )
         self.state.game_state["answerer_id"] = target
 
     def _handle_answer(self, pid: int, action: str):
@@ -285,6 +296,10 @@ class SpyfallEnv(ta.Env):
             observation_type=ta.ObservationType.PLAYER_ACTION,
         )
         self.state.game_state["real_turn_count"] += 1
+        self.state.add_observation(
+            message="Answer received. Moving into virtual turn rotation — each player may now vote or pass.",
+            observation_type=ta.ObservationType.GAME_MESSAGE,
+        )
 
     def _handle_virtual(self, pid: int, action: str):
         gs = self.state.game_state
@@ -454,7 +469,16 @@ class SpyfallEnv(ta.Env):
 
             # return to q&a
             self.phase = Phase.ASK
-            self.state.manually_set_current_player_id(gs["answerer_id"])
+            next_asker = gs["answerer_id"]
+            self.state.add_observation(
+                to_id=next_asker,
+                message=(
+                    "It is your turn to ask. You MUST use [ASK](player_id; question) "
+                    "— passing is not allowed. Example: [ASK](2; What's the dress code?)"
+                ),
+                observation_type=ta.ObservationType.GAME_MESSAGE,
+            )
+            self.state.manually_set_current_player_id(next_asker)
             return
 
         if self.phase == Phase.VOTE:
@@ -574,7 +598,16 @@ class SpyfallEnv(ta.Env):
 
         # next Q&A
         self.phase = Phase.ASK
-        self.state.manually_set_current_player_id(gs["answerer_id"])
+        next_asker = gs["answerer_id"]
+        self.state.add_observation(
+            to_id=next_asker,
+            message=(
+                "It is your turn to ask. You MUST use [ASK](player_id; question) "
+                "— passing is not allowed. Example: [ASK](2; What's the dress code?)"
+            ),
+            observation_type=ta.ObservationType.GAME_MESSAGE,
+        )
+        self.state.manually_set_current_player_id(next_asker)
 
     # ── outcome helpers ───────────────────────────────────────────────────
 
