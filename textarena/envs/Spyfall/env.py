@@ -30,22 +30,24 @@ functional details
 tools
   all players
     [ASK](player_id; question) – only usable on a real turn
+    [ANSWER](response) – usable after being [ASK]ed
     [VOTE](player_id) – usable during any vote
   spy only
     [GUESS](location_name) - usable on virtual turns and during the
                               end-of-round vote
 
 turn structure
-  1.  a random player is chosen for the first real turn
-  2.  the recipient answers (no tool, freeform response)
-  3.  virtual turn rotation occurs (all players in random order). every
-      player may VOTE or GUESS (if spy). anything else is a no-op pass.
-  4.  if no game-ending event, the answerer becomes the new asker (goto 1).
-  5.  after `max_real_turns` the round ends. a forced vote is called
-      (the spy can still GUESS during their virtual turn, but they aren't
-      required to, they can vote like any other player). if they guess
-      correctly, they win. otherwise, they lose and the non-spies win).
-      if there is no majority, the spy wins.
+  1. a random player is chosen for the first real turn and asks a
+     question to another player using [ASK]
+  2. the recipient answers using [ANSWER]
+  3. virtual turn rotation occurs (all players in random order). every
+     player may VOTE or GUESS (if spy). anything else is a no-op pass.
+  4. if no game-ending event, the answerer becomes the new asker (goto 1).
+  5. after `max_real_turns` the round ends. a forced vote is called
+     (the spy can still GUESS during their virtual turn, but they aren't
+     required to, they can vote like any other player). if they guess
+     correctly, they win. otherwise, they lose and the non-spies win).
+     if there is no majority, the spy wins.
 
 voting
   • a vote can be initiated on any virtual turn via [VOTE](player_id).
@@ -75,6 +77,7 @@ class Phase(Enum):
 
 
 ASK_PATTERN = re.compile(r"\[ASK\]\s*\((\d+)\s*;\s*(.+?)\)", re.IGNORECASE | re.DOTALL)
+ANSWER_PATTERN = re.compile(r"\[ANSWER\]\s*\((.+?)\)", re.IGNORECASE)
 VOTE_PATTERN = re.compile(r"\[VOTE\]\s*\((\d+)\)", re.IGNORECASE)
 GUESS_PATTERN = re.compile(r"\[GUESS\]\s*\((.+?)\)", re.IGNORECASE)
 
@@ -170,16 +173,16 @@ class SpyfallEnv(ta.Env):
         location_list = ", ".join(sorted(self.locations.keys()))
 
         base = (
-            f"Welcome to Spyfall!  You are Player {player_id}.\n"
+            f"Welcome to the game of Spyfall! You are Player {player_id}.\n"
             f"Players: {players_list}\n"
             f"Max questions per round: {self.max_real_turns}\n\n"
         )
 
         if game_state["roles"][player_id] == "spy":
             base += (
-                "You are the SPY.  You do NOT know the location.\n"
+                "You are the SPY. You do NOT know the location.\n"
                 "The other players know the location and each have an assigned role.\n"
-                "Your goal: figure out the location without being detected.\n"
+                "If the other players win before you, you lose.\n"
                 "\n"
                 "You can win by:\n"
                 "- Guessing the location before the other players discover that you're the spy.\n"
@@ -191,9 +194,11 @@ class SpyfallEnv(ta.Env):
                 "\n"
                 "Available tools — brackets, parentheses, and semicolons must appear exactly as shown:\n"
                 "  [ASK](player_id; question) – e.g. [ASK](2; What's the dress code?)\n"
-                "  [VOTE](player_id)          – e.g. [VOTE](3)\n"
-                "  [GUESS](location_name)     – e.g. [GUESS](The Beach)\n"
-                "  (ask: your asking turn only | vote: during votes | guess: any time)\n"
+                "  [ANSWER](response) – e.g. [ANSWER](The dress code is casual, you see lots of baseball caps.)\n"
+                "  [VOTE](player_id) – e.g. [VOTE](3)\n"
+                "  [GUESS](location_name) – e.g. [GUESS](The Beach)\n"
+                "  (ask: your asking turn only | answer: only after being asked\n"
+                "  | vote: during votes | guess: any time)\n"
                 "\n"
                 f"Possible locations: {location_list}\n"
             )
@@ -205,18 +210,22 @@ class SpyfallEnv(ta.Env):
                 f"Your role at this location: {role}\n"
                 "\n"
                 "One of the other players is the SPY (they do NOT know the location).\n"
+                "If the spy wins, you and your team lose.\n"
                 "\n"
                 "You can win by:\n"
                 "- Identifying the spy and accusing them via a majority vote.\n"
-                "\n"
-                "Available tools — brackets, parentheses, and semicolons must appear exactly as shown:\n"
-                "  [ASK](player_id; question) – e.g. [ASK](2; What's the dress code?)\n"
-                "  [VOTE](player_id)          – e.g. [VOTE](3)\n"
                 "\n"
                 "The spy can win by:\n"
                 "- Guessing the location before you discover who they are.\n"
                 "- Remaining undetected for the whole round.\n"
                 "- The non-spies accusing the wrong player via a majority vote.\n"
+                "\n"
+                "Available tools — brackets, parentheses, and semicolons must appear exactly as shown:\n"
+                "  [ASK](player_id; question) – e.g. [ASK](2; What's the dress code?)\n"
+                "  [ANSWER](response) – e.g. [ANSWER](The dress code is casual, you see lots of baseball caps.)\n"
+                "  [VOTE](player_id) – e.g. [VOTE](3)\n"
+                "  (ask: your asking turn only | answer: only after being asked\n"
+                "  | vote: during votes)\n"
                 "\n"
                 f"Possible locations: {location_list}\n"
             )
@@ -225,8 +234,8 @@ class SpyfallEnv(ta.Env):
             "\nTurn structure:\n"
             "  1. The current asker MUST use [ASK](player_id; question) to question\n"
             "     another player. Passing is not allowed on your asking turn.\n"
-            "  2. The recipient answers in plain text — do NOT use [ASK], [VOTE],\n"
-            "     or [GUESS] in your answer. Just write your response naturally.\n"
+            "  2. The recipient answers using [ANSWER]. Do NOT use [ASK], [VOTE],\n"
+            "     or [GUESS] in your answer.\n"
             "  3. After each Q&A, every player gets a virtual turn where they\n"
             "     may [VOTE] to accuse someone (or [GUESS] if spy). Anything\n"
             "     else you type is treated as a pass.\n"
@@ -283,16 +292,29 @@ class SpyfallEnv(ta.Env):
             to_id=target,
             message=(
                 f"Player {pid} is asking you: {question}. "
-                "Reply in plain text only — do NOT use [ASK], [VOTE], or [GUESS] in your answer."
+                "Reply using the [ANSWER] tool — do NOT use [ASK], [VOTE], or [GUESS] in your answer."
             ),
             observation_type=ta.ObservationType.GAME_MESSAGE,
         )
         self.state.game_state["answerer_id"] = target
 
     def _handle_answer(self, pid: int, action: str):
+        m = ANSWER_PATTERN.search(action)
+        if not m:
+            self._invalid(
+                pid,
+                (
+                    "You must answer using: [ANSWER](response).\n"
+                    "Example: [ANSWER](The dress code here is formal.)\n"
+                ),
+            )
+            return
+
+        response = m.group(1).strip()
+
         self.state.add_observation(
             from_id=pid,
-            message=f"Player {pid} answers: {action}",
+            message=f"Player {pid} answers: {response}",
             observation_type=ta.ObservationType.PLAYER_ACTION,
         )
         self.state.game_state["real_turn_count"] += 1
@@ -347,7 +369,7 @@ class SpyfallEnv(ta.Env):
         # everyone must VOTE
         vote_m = VOTE_PATTERN.search(action)
         if not vote_m:
-            self._invalid(pid, "You must vote using [VOTE](player_id).")
+            self._invalid(pid, "You MUST vote using [VOTE](player_id). Do not use [ASK] or [ANSWER] in your response.")
             return
 
         target = int(vote_m.group(1))
